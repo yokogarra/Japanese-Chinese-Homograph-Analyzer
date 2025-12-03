@@ -1,0 +1,21 @@
+🇨🇳 应用程序概述
+这是一个完整、功能性的 React 应用程序，旨在分析中文和日文文本文件（例如维基百科数据转储），提取共享的汉字词汇（同形异义词/同形词），并利用 Gemini API 生成一个包含释义、读音和例句的比较词典。
+
+应用功能要点
+文件上传： 用户可以上传用于中文和日文内容的 .txt 文件。
+
+本地预处理： 应用程序使用 TypeScript 逻辑（正则表达式）在本地高效地查找同时出现在两个文件中的两个或更多字符的汉字词汇的交集。这样做极大地节省了令牌（tokens），因为它只将相关的词汇列表发送给 Gemini，而不是原始文本。
+
+Gemini 分析： 筛选后的共享词汇列表被发送到 gemini-2.5-flash 模型。AI 扮演语言学家的角色，为词典填充元数据（拼音、振假名、释义以及“形近异义词（False Friends）”等关系类型）。
+
+交互式仪表板： 结果在一个可筛选、界面清晰的 UI 中展示。
+
+
+文件/目录,描述
+metadata.json,应用程序详细信息。
+index.html,入口点文件（使用 Tailwind CSS）。
+index.tsx,React 根组件。
+types.ts,语言学数据所需的 TypeScript 接口定义。
+services/geminiService.ts,处理与 Google GenAI SDK 交互的服务文件。
+components/,可重用的 UI 组件（Header、FileInput、WordCard、Stats）。
+App.tsx,主逻辑控制器和布局文件。

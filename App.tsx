@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { Header } from './components/Header';
 import { StatsCard } from './components/StatsCard';
 import { WordList } from './components/WordList';
@@ -10,6 +10,51 @@ import { UploadCloud, FileType, Loader2, AlertCircle, Files } from 'lucide-react
 // \u4E00-\u9FFF covers the main block of CJK Unified Ideographs.
 // We look for words with 2 or more characters.
 const CJK_REGEX = /[\u4E00-\u9FFF]{2,}/g;
+
+const createDefaultStats = (): ProcessingStats => ({
+  cnWordCount: 0,
+  jpWordCount: 0,
+  intersectionCount: 0,
+  processedCount: 0
+});
+
+const LOCAL_STORAGE_KEY = 'homograph-analysis-state';
+
+interface PersistedAnalysisState {
+  status: AppStatus;
+  data: HomographEntry[];
+  stats: ProcessingStats;
+}
+
+const getPersistedAnalysisState = (): PersistedAnalysisState => {
+  if (typeof window === 'undefined') {
+    return { status: 'IDLE', data: [], stats: createDefaultStats() };
+  }
+
+  try {
+    const raw = window.localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) {
+      return { status: 'IDLE', data: [], stats: createDefaultStats() };
+    }
+
+    const parsed = JSON.parse(raw);
+    const persistedStats = parsed?.stats ?? {};
+
+    return {
+      status: parsed?.status === 'COMPLETE' ? 'COMPLETE' : 'IDLE',
+      data: Array.isArray(parsed?.data) ? parsed.data : [],
+      stats: {
+        cnWordCount: Number(persistedStats.cnWordCount) || 0,
+        jpWordCount: Number(persistedStats.jpWordCount) || 0,
+        intersectionCount: Number(persistedStats.intersectionCount) || 0,
+        processedCount: Number(persistedStats.processedCount) || 0
+      }
+    };
+  } catch (error) {
+    console.warn('Failed to restore analysis state:', error);
+    return { status: 'IDLE', data: [], stats: createDefaultStats() };
+  }
+};
 
 // Helper to find the sentence containing the word
 const findSentence = (text: string, word: string): string | undefined => {
@@ -41,15 +86,26 @@ const findSentence = (text: string, word: string): string | undefined => {
 }
 
 function App() {
-  const [status, setStatus] = useState<AppStatus>('IDLE');
+  const persistedState = useMemo(() => getPersistedAnalysisState(), []);
+  const [status, setStatus] = useState<AppStatus>(persistedState.status);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [data, setData] = useState<HomographEntry[]>([]);
-  const [stats, setStats] = useState<ProcessingStats>({
-    cnWordCount: 0,
-    jpWordCount: 0,
-    intersectionCount: 0,
-    processedCount: 0
-  });
+  const [data, setData] = useState<HomographEntry[]>(persistedState.data);
+  const [stats, setStats] = useState<ProcessingStats>(persistedState.stats);
+
+  const persistState = useCallback((payload: PersistedAnalysisState | null) => {
+    if (typeof window === 'undefined') return;
+    if (!payload) {
+      window.localStorage.removeItem(LOCAL_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(payload));
+  }, []);
+
+  useEffect(() => {
+    if (status === 'COMPLETE' && data.length > 0) {
+      persistState({ status, data, stats });
+    }
+  }, [status, data, stats, persistState]);
 
   const cnFileRef = useRef<HTMLInputElement>(null);
   const jpFileRef = useRef<HTMLInputElement>(null);
@@ -57,6 +113,8 @@ function App() {
   // Store FileList or null
   const [cnFiles, setCnFiles] = useState<FileList | null>(null);
   const [jpFiles, setJpFiles] = useState<FileList | null>(null);
+  const hasResults = data.length > 0;
+  const showUploadCard = !hasResults && (status === 'IDLE' || status === 'ERROR');
 
   const handleFileChange = (lang: 'CN' | 'JP', e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -106,12 +164,14 @@ function App() {
       // We filter for intersection because we specifically want "homographs".
       const intersection: string[] = [...cnSet].filter(word => jpSet.has(word));
 
-      setStats({
+      const baseStats: ProcessingStats = {
         cnWordCount: cnSet.size,
         jpWordCount: jpSet.size,
         intersectionCount: intersection.length,
         processedCount: 0
-      });
+      };
+
+      setStats(baseStats);
 
       if (intersection.length === 0) {
         setErrorMsg("指定されたファイル間で共通する漢字語彙が見つかりませんでした。");
@@ -132,8 +192,13 @@ function App() {
         source_jp_sentence: findSentence(jpText, item.word)
       }));
 
+      const finalStats: ProcessingStats = {
+        ...baseStats,
+        processedCount: results.length
+      };
+
       setData(enrichedResults);
-      setStats(prev => ({ ...prev, processedCount: results.length }));
+      setStats(finalStats);
       setStatus('COMPLETE');
 
     } catch (err: any) {
@@ -145,9 +210,12 @@ function App() {
 
   const reset = () => {
     setStatus('IDLE');
+    setErrorMsg(null);
     setData([]);
+    setStats(createDefaultStats());
     setCnFiles(null);
     setJpFiles(null);
+    persistState(null);
     if (cnFileRef.current) cnFileRef.current.value = '';
     if (jpFileRef.current) jpFileRef.current.value = '';
   };
@@ -162,13 +230,13 @@ function App() {
         <div className="mb-8 text-center max-w-2xl mx-auto">
           <h2 className="text-3xl font-bold text-slate-800 mb-4">日中同形語（同形異義語）を発見する</h2>
           <p className="text-slate-600">
-            中国語と日本語のテキストファイル（Wikipediaのダンプなど）をアップロードしてください。
+            中国語と日本語のテキストファイルをアップロードしてください。
             AIが共通する漢字語彙を抽出し、意味の違いや「同形異義語」を自動的に分析・辞書化します。
           </p>
         </div>
 
         {/* Upload Section */}
-        {status === 'IDLE' || status === 'ERROR' ? (
+        {showUploadCard ? (
           <div className="max-w-3xl mx-auto bg-white rounded-2xl shadow-sm border border-slate-200 p-8">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
               
@@ -267,7 +335,7 @@ function App() {
         )}
 
         {/* Results Dashboard */}
-        {status === 'COMPLETE' && (
+        {hasResults && (
           <div className="animate-fade-in-up">
             <div className="flex justify-between items-end mb-6">
               <h2 className="text-2xl font-bold text-slate-800">分析結果</h2>
